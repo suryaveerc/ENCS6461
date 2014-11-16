@@ -10,13 +10,15 @@ char* getmessage(char *);
 #include <windows.h>
 #include <fstream>
 #include <time.h>
+#include <sstream>
+#include <iomanip>
 using namespace std;
 //user defined port number
 #define REQUEST_PORT 7000
 #define TIMEOUT_USEC 900000
 #define TIMEOUT_SEC 5
 #define MAX_RETRIES 3000			
-#define MAX_PACKET_SEQ 2
+#define MAX_PACKET_SEQ 20
 int port=REQUEST_PORT;
 //socket data types
 SOCKET clientSocket;
@@ -29,8 +31,8 @@ int socketlen;
 int ibufferlen=0;
 int ibytessent;
 int ibytesrecv=0;
-int clientpktseq = -1;
-int serverpktseq = -1;
+int clientpktseq = 0;
+int serverpktseq = 0;
 
 
 //host data types
@@ -150,7 +152,7 @@ int main(void){
 		randomnumber = (rand()%255)+1;
 		int randlen = to_string(randomnumber).length();
 		cout<<"Generated random number = "<<randomnumber<<endl;
-		cout<<(randomnumber & 1)<<endl;
+	//	cout<<(randomnumber & 1)<<endl;
 		memset(szbuffer,'\0',1024);
 
 		sprintf(szbuffer,to_string(randomnumber).c_str());
@@ -353,10 +355,21 @@ void ftpGET(string argument)
 		{
 
 			if(!threewayhandshakecomplete)
-				sprintf(szbuffer,string(szbuffer).insert(0,rcvdacknowledgementmsg).c_str());
-			else	
-				sprintf(szbuffer,string(szbuffer).insert(0,to_string(clientpktseq)).c_str());
-
+			{
+				stringstream paddedseq;
+				paddedseq <<setfill('0')<<setw(2)<<rcvdacknowledgementmsg;
+				string seq = paddedseq.str();
+				paddedseq.str("");
+				sprintf(szbuffer,string(szbuffer).insert(0,seq).c_str());
+			}
+			else
+			{
+				stringstream paddedseq;
+				paddedseq <<setfill('0')<<setw(2)<<clientpktseq;
+				string seq = paddedseq.str();
+				paddedseq.str("");
+				sprintf(szbuffer,string(szbuffer).insert(0,seq).c_str());
+			}
 
 			if(!threewayhandshakecomplete)
 			{
@@ -371,12 +384,13 @@ void ftpGET(string argument)
 			int rcvdpktnumberforclient = -1;
 			int rcvdpktnumberforserver = -1 ;
 			int writeCounter = 0;
-
+			int extrabytes = 4;
 			char *recvbuff = new char[packetLengthInBytes];
 			time_t start = time(0);
 			int totalBytes = 0;
 			while(!(ack && transfercomplete))
 			{
+				cout<<szbuffer<<endl;
 				if(!ack)
 				{
 					if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
@@ -384,8 +398,8 @@ void ftpGET(string argument)
 					logEvents("GET","Sent request to server: "+string(szbuffer));
 				}
 
-				recvbuff = new char[packetLengthInBytes+2];
-				memset(recvbuff,'\0',packetLengthInBytes+2);
+				recvbuff = new char[packetLengthInBytes+extrabytes];
+				memset(recvbuff,'\0',packetLengthInBytes+extrabytes);
 				correctpktrcvd = false;
 				while(!correctpktrcvd)
 				{
@@ -399,13 +413,13 @@ void ftpGET(string argument)
 						i = select(1,&readfds,NULL,NULL,timeout);
 					if(i)
 					{
-						if((ibytesrecv = recvfrom(clientSocket,recvbuff,packetLengthInBytes+2,0,(LPSOCKADDR)&serverSocketAddr,&socketlen))==SOCKET_ERROR)
+						if((ibytesrecv = recvfrom(clientSocket,recvbuff,packetLengthInBytes+extrabytes,0,(LPSOCKADDR)&serverSocketAddr,&socketlen))==SOCKET_ERROR)
 							throw RECV_FAILED_MSG;
 						logEvents("GET","Data received from server \n"+ string(recvbuff));
-						rcvdpktnumberforclient = string(recvbuff).at(0) - 48;
-						rcvdpktnumberforserver = string(recvbuff).at(1) - 48;
-				//		logEvents("GET","rcvdpktnumberforclient: "+ to_string(rcvdpktnumberforclient));
-				//		logEvents("GET","rcvdpktnumberforserver:"+ to_string(rcvdpktnumberforserver));
+						rcvdpktnumberforclient = stoi(string(recvbuff).substr(0,1).c_str());
+						rcvdpktnumberforserver = stoi(string(recvbuff).substr(2,3).c_str());
+						logEvents("GET","rcvdpktnumberforclient: "+ to_string(rcvdpktnumberforclient));
+						logEvents("GET","rcvdpktnumberforserver:"+ to_string(rcvdpktnumberforserver));
 						if(checkSequence(clientpktseq,rcvdpktnumberforclient))
 						{
 							ack = true;
@@ -418,7 +432,7 @@ void ftpGET(string argument)
 								++writeCounter;
 								cout<<"Total packets received "<<writeCounter<<endl;
 								logEvents("Get","Total packets received "+to_string(writeCounter));
-								char *writebuff = recvbuff+2; //this will ignore the first byte
+								char *writebuff = recvbuff+extrabytes; //this will ignore the first byte
 								totalBytes = totalBytes + ibytesrecv;
 								  logEvents("Break ","---------------------------------------------------------------------");
 									logEvents("GET", "Bytes received from server in "+ to_string(writeCounter) +string("request: ") +  to_string(ibytesrecv));
@@ -432,7 +446,7 @@ void ftpGET(string argument)
 								}
 								else
 								{
-									file.write(writebuff, ibytesrecv-2);
+									file.write(writebuff, ibytesrecv-extrabytes);
 								}
 							}
 						}
