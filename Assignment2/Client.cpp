@@ -1,10 +1,4 @@
-// CLIENT TCP PROGRAM
-// Revised and tidied up by
-// J.W. Atwood
-// 1999 June 30
 char* getmessage(char *);
-/* send and receive codes between client and server */
-/* This is your basic WINSOCK shell */
 #pragma comment( linker, "/defaultlib:ws2_32.lib" )
 #include <winsock2.h>
 #include <ws2tcpip.h>
