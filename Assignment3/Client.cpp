@@ -445,6 +445,21 @@ void ftpGET(string argument)
 									file.write(writebuff, ibytesrecv-extrabytes);
 								}
 							}
+							else
+							{
+								cout<<"Discarding the wrong PACKET "<<rcvdpktnumberforserver<<endl;
+								cout<<"Expecting packet "<<serverpktseq<<endl;
+								logEvents("Client","Discarding the wrong Packet.\nExpecting packet:"+to_string(serverpktseq)+"\nReceived packet: "+to_string(rcvdpktnumberforclient));
+								memset(szbuffer,'\0',packetLengthInBytes);
+								stringstream paddedseq;
+								paddedseq <<setfill('0')<<setw(2)<<serverpktseq*-1;
+								string seqs = paddedseq.str();
+								paddedseq.str("");
+								sprintf(szbuffer,seqs.c_str());
+								if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
+									throw SEND_FAILED_MSG;
+								logEvents("Client", "Sent NAK"+string(szbuffer));
+							}
 						}
 						else
 						{

@@ -23,7 +23,7 @@ using namespace std;
 
 #define REQUEST_PORT 7001
 #define TIMEOUT_USEC 900000	
-#define TIMEOUT_SEC 10
+#define TIMEOUT_SEC 10000
 #define MAX_RETRIES 3000
 #define MAX_PACKET_SEQ 4
 #define WINDOW_SIZE MAX_PACKET_SEQ+1
@@ -1003,7 +1003,7 @@ bool receiveAck(SOCKET socket , SOCKADDR_IN socketaddr,int packetseq, int socket
 			if(!threewayhandshakecomplete)
 				ackrcvdforpkt = stoi(string(recvbuffer).substr(0,to_string(packetseq).length()).c_str());
 			else
-				ackrcvdforpkt = stoi(string(recvbuffer).substr(0,1).c_str());
+				ackrcvdforpkt = stoi(string(recvbuffer).substr(0,3).c_str());
 
 			cout<<"Received ACK for packet sequence from client: "<<ackrcvdforpkt<<endl;
 			logEvents("Server","ACK Data received from client \n"+ string(recvbuffer));	
