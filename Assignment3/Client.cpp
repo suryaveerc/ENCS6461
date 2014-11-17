@@ -16,7 +16,7 @@ using namespace std;
 //user defined port number
 #define REQUEST_PORT 7000
 #define TIMEOUT_USEC 900000
-#define TIMEOUT_SEC 5
+#define TIMEOUT_SEC 10
 #define MAX_RETRIES 3000			
 #define MAX_PACKET_SEQ 20
 int port=REQUEST_PORT;
@@ -356,11 +356,7 @@ void ftpGET(string argument)
 
 			if(!threewayhandshakecomplete)
 			{
-				stringstream paddedseq;
-				paddedseq <<setfill('0')<<setw(2)<<rcvdacknowledgementmsg;
-				string seq = paddedseq.str();
-				paddedseq.str("");
-				sprintf(szbuffer,string(szbuffer).insert(0,seq).c_str());
+				sprintf(szbuffer,string(szbuffer).insert(0,rcvdacknowledgementmsg).c_str());
 			}
 			else
 			{
@@ -416,8 +412,8 @@ void ftpGET(string argument)
 						if((ibytesrecv = recvfrom(clientSocket,recvbuff,packetLengthInBytes+extrabytes,0,(LPSOCKADDR)&serverSocketAddr,&socketlen))==SOCKET_ERROR)
 							throw RECV_FAILED_MSG;
 						logEvents("GET","Data received from server \n"+ string(recvbuff));
-						rcvdpktnumberforclient = stoi(string(recvbuff).substr(0,1).c_str());
-						rcvdpktnumberforserver = stoi(string(recvbuff).substr(2,3).c_str());
+						rcvdpktnumberforclient = stoi(string(recvbuff).substr(0,2).c_str());
+						rcvdpktnumberforserver = stoi(string(recvbuff).substr(2,2).c_str());
 						logEvents("GET","rcvdpktnumberforclient: "+ to_string(rcvdpktnumberforclient));
 						logEvents("GET","rcvdpktnumberforserver:"+ to_string(rcvdpktnumberforserver));
 						if(checkSequence(clientpktseq,rcvdpktnumberforclient))
