@@ -18,7 +18,8 @@ using namespace std;
 #define TIMEOUT_USEC 900000
 #define TIMEOUT_SEC 10000
 #define MAX_RETRIES 3000			
-#define MAX_PACKET_SEQ 20
+#define MAX_PACKET_SEQ 4
+#define WINDOW_SIZE MAX_PACKET_SEQ-1
 int port=REQUEST_PORT;
 //socket data types
 SOCKET clientSocket;
