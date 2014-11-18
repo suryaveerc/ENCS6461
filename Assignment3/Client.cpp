@@ -16,7 +16,7 @@ using namespace std;
 //user defined port number
 #define REQUEST_PORT 7000
 #define TIMEOUT_USEC 900000
-#define TIMEOUT_SEC 10
+#define TIMEOUT_SEC 10000
 #define MAX_RETRIES 3000			
 #define MAX_PACKET_SEQ 20
 int port=REQUEST_PORT;

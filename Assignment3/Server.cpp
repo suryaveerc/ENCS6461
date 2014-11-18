@@ -76,7 +76,8 @@ bool threewayhandshakecomplete = false;
 bool handshakerequest = true;
 bool correctpktrcvd = false;
 bool lastpacketacknowledged = false ; 
-
+bool nodatatoread = false;
+int window = WINDOW_SIZE;
 // defined methods
 string trim(string );
 void initializeSockets();
@@ -494,6 +495,8 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 			int extrabytes = 4;
 			stringstream paddedseq;
 			bool docontinue = true;
+			int arrayindex = serverpktseq;
+
 			while(docontinue)
 			{
 				int bytesToSend  = 0;
@@ -531,17 +534,25 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 
 				if((available_window > 0) || (docontinue==false))
 				{
-					next_pktseq = serverpktseq;
-					packetwindow[next_pktseq] = tempbuff;
-					sentbytes[next_pktseq] = bytesToSend+extrabytes;
-					next_pktseq = (next_pktseq+1) % MAX_PACKET_SEQ;
+					next_pktseq = serverpktseq;	
+					sentbytes[arrayindex] = bytesToSend+extrabytes;
+					packetwindow[arrayindex] = tempbuff;
+
+					//next_pktseq = (next_pktseq+1) % MAX_PACKET_SEQ;
+
 					logEvents("DEBUG","available_window before send : "+to_string(available_window));
+
 					available_window--;
+
 					packetstosend++;
-					if(docontinue)
-						lastpackettoacked = serverpktseq;
+					if(!docontinue)
+					{
+						nodatatoread = true;
+					}
 					serverpktseq = (serverpktseq +1) % MAX_PACKET_SEQ;
-					
+					logEvents("DEBUG","Current WINDOW_SIZE: "+to_string(WINDOW_SIZE));
+					arrayindex = (arrayindex + 1) % window ;
+					logEvents("DEBUG","Current arrayindex: "+to_string(arrayindex));
 					logEvents("DEBUG","next_pktseq: "+to_string(serverpktseq));
 					logEvents("DEBUG","Packets to send : "+to_string(packetstosend));
 				}
@@ -549,15 +560,15 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 				{
 					ibytessent = sendRequest(clientSocket,clientSocketAddr,tempbuff,serverpktseq,senderAddrSize, bytesToSend+extrabytes);
 					packetstosend =0;
+					totalBytes = totalBytes + ibytessent;
 				}
 				++readCounter;
-
-				totalBytes = totalBytes + ibytessent;
+				
 			}
 			time_t end = time(0);
 
-			cout<<"Sent "<<to_string(readCounter+1)<<" packets for "<<totalBytes<< " bytes in "<<difftime(end,start)<<" seconds"<<endl;
-			logEvents("GET","Transfer complete. Sent "+to_string(readCounter+1) +" packets for " + to_string(fsize) +" bytes in " + to_string(difftime(end,start)) +" seconds");
+			cout<<"Sent "<<to_string(readCounter)<<" packets for "<<totalBytes<< " bytes in "<<difftime(end,start)<<" seconds"<<endl;
+			logEvents("GET","Transfer complete. Sent "+to_string(readCounter) +" packets for " + to_string(fsize) +" bytes in " + to_string(difftime(end,start)) +" seconds");
 		}
 		else
 		{
@@ -949,12 +960,6 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 	int retrycount = 0;
 	bool acknowledged = false;
 	int totalbytessent = 0;
-
-
-
-	//	int i=send_base;
-
-
 	while(!acknowledged)
 	{
 		if(handshakerequest)
@@ -976,17 +981,18 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 				//		cout<<"Request data sent to client: "<<sendbuffer<<endl;
 				logEvents("Server","Data sent to client \n"+ string(packetwindow[i]));
 				logEvents("Server","Sent request packet sequence to client: "+ i);
-				i = (i+1) % MAX_PACKET_SEQ;
+				i = (i+1) % window;
 				packetstosend--;
 			}
 		}
 		if(receiveAck( socket , socketaddr, packetseq, socketlength))
 		{
-
 			acknowledged = true;
 		}
+		else
+			if(nodatatoread)
+				acknowledged = false; //continue within this while loop to send data from array.
 	}
-
 	return totalbytessent ;
 }
 
@@ -1030,32 +1036,37 @@ bool receiveAck(SOCKET socket , SOCKADDR_IN socketaddr,int packetseq, int socket
 
 			}
 			else
+			{
 				ackrcvdforpkt = stoi(string(recvbuffer).substr(0,3).c_str());
 
-			cout<<"Received ACK for packet sequence from client: "<<ackrcvdforpkt<<endl;
-			logEvents("Server","ACK Data received from client \n"+ string(recvbuffer));	
-
-			//check Ack/NAK
-			if(ackrcvdforpkt >=0)
-			{
-				//					serverpktseq = (serverpktseq+1) % MAX_PACKET_SEQ;		
-				if(send_base > ackrcvdforpkt)
-					available_window =available_window + WINDOW_SIZE-send_base+ackrcvdforpkt + 1;
-				else if(send_base <= ackrcvdforpkt)
-					available_window =available_window + ackrcvdforpkt - send_base + 1;
-				logEvents("DEBUG","available_window after recv: "+to_string(available_window));
-				send_base = (ackrcvdforpkt+1) % MAX_PACKET_SEQ;
-				logEvents("DEBUG","New send_base: "+to_string(send_base));
-				if(lastpackettoacked = ackrcvdforpkt)
-					lastpacketacknowledged = true;
-				return true;
-			}
-			else
-			{
-				send_base = -1 * ackrcvdforpkt;
-				cout<<"Received NAK for packet "<<send_base<<endl;
-				logEvents("Server","Received NAK for packet: "+to_string(send_base));
-				return false;
+				cout<<"Received ACK for packet sequence from client: "<<ackrcvdforpkt<<endl;
+				logEvents("Server","ACK Data received from client \n"+ string(recvbuffer));	
+				//check Ack/NAK
+				if(ackrcvdforpkt >=0)
+				{
+					//					serverpktseq = (serverpktseq+1) % MAX_PACKET_SEQ;		
+					if(send_base > ackrcvdforpkt)
+					{
+						logEvents("Debug>","\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+"\navailable_window: "+to_string(available_window)+"\nsend_base: "+to_string(send_base)+"\nackrcvdforpkt: "+to_string(ackrcvdforpkt));
+						available_window =available_window + WINDOW_SIZE-send_base+ackrcvdforpkt + 1;
+					}
+					else if(send_base <= ackrcvdforpkt)
+					{
+						logEvents("Debug<=","\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+"\navailable_window: "+to_string(available_window)+"\nsend_base: "+to_string(send_base)+"\nackrcvdforpkt: "+to_string(ackrcvdforpkt));
+						available_window =available_window + ackrcvdforpkt - send_base + 1;
+					}
+					logEvents("DEBUG","available_window after recv: "+to_string(available_window));
+					send_base = (ackrcvdforpkt+1) % MAX_PACKET_SEQ;
+					logEvents("DEBUG","New send_base: "+to_string(send_base));
+					return true;
+				}
+				else
+				{
+					send_base = -1 * ackrcvdforpkt;
+					cout<<"Received NAK for packet "<<send_base<<endl;
+					logEvents("Server","Received NAK for packet: "+to_string(send_base));
+					return false;
+				}
 			}
 		}
 		else
