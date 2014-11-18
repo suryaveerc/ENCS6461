@@ -26,7 +26,7 @@ using namespace std;
 #define TIMEOUT_SEC 10000
 #define MAX_RETRIES 3000
 #define MAX_PACKET_SEQ 4
-#define WINDOW_SIZE MAX_PACKET_SEQ+1
+#define WINDOW_SIZE MAX_PACKET_SEQ-1
 int port=REQUEST_PORT;
 //socket data types
 SOCKET serverSocket;
@@ -64,16 +64,19 @@ char* packetwindow[WINDOW_SIZE];
 int sentbytes[WINDOW_SIZE];
 int send_base;
 int packetcounter;
-
+int i;
+int packetstosend;
 int available_window = WINDOW_SIZE;
 int next_pktseq = 0;
 int seqlength = 1;
+int lastpackettoacked;
 string *commandLineArguments;
 const int num_threads = 5;
 bool threewayhandshakecomplete = false;
 bool handshakerequest = true;
 bool correctpktrcvd = false;
-bool ignoretheack = false ; 
+bool lastpacketacknowledged = false ; 
+
 // defined methods
 string trim(string );
 void initializeSockets();
@@ -183,6 +186,8 @@ void acceptUserConnections()
 			cout<<"Received from client : "<<szbuffer<<endl;
 			clientpktseq = (randomnumber & 1);
 			serverpktseq = (atoi(szbuffer) & 1);
+			send_base = serverpktseq;
+			i = send_base ;
 			strcat(szbuffer,to_string(randomnumber).c_str());
 			cout<<"Step2: Sending handshake msg to client: "<<szbuffer<<endl;
 			logEvents("Server", "Step2: Sending handshake msg to client: "+string(szbuffer));
@@ -526,18 +531,24 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 
 				if((available_window > 0) || (docontinue==false))
 				{
+					next_pktseq = serverpktseq;
 					packetwindow[next_pktseq] = tempbuff;
 					sentbytes[next_pktseq] = bytesToSend+extrabytes;
 					next_pktseq = (next_pktseq+1) % MAX_PACKET_SEQ;
-					logEvents("DEBUG","********available_window before send : "+to_string(available_window));
-					available_window = (available_window-1);
-					serverpktseq = (serverpktseq +1) % MAX_PACKET_SEQ;
-					logEvents("DEBUG","next_pktseq: "+to_string(serverpktseq));
 					logEvents("DEBUG","available_window before send : "+to_string(available_window));
+					available_window--;
+					packetstosend++;
+					if(docontinue)
+						lastpackettoacked = serverpktseq;
+					serverpktseq = (serverpktseq +1) % MAX_PACKET_SEQ;
+					
+					logEvents("DEBUG","next_pktseq: "+to_string(serverpktseq));
+					logEvents("DEBUG","Packets to send : "+to_string(packetstosend));
 				}
 				if((available_window == 0) || (docontinue==false))
 				{
 					ibytessent = sendRequest(clientSocket,clientSocketAddr,tempbuff,serverpktseq,senderAddrSize, bytesToSend+extrabytes);
+					packetstosend =0;
 				}
 				++readCounter;
 
@@ -938,24 +949,11 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 	int retrycount = 0;
 	bool acknowledged = false;
 	int totalbytessent = 0;
-	int packetstosend = WINDOW_SIZE-available_window;
-	int i=send_base;
-	if(!handshakerequest)
-	{
-		while(packetstosend!=0)
-		{
-			logEvents("DEBUG","i =: "+to_string(i));
-			if((ibytessent = sendto(socket,packetwindow[i], sentbytes[i],0,(LPSOCKADDR)&socketaddr,socketlength)) == SOCKET_ERROR)
-				throw SEND_FAILED_MSG;
-			totalbytessent = totalbytessent  + ibytessent ;
-			cout<<"Sent request packet sequence to client: "<<packetseq<<endl;
-			//		cout<<"Request data sent to client: "<<sendbuffer<<endl;
-			 logEvents("Server","Data sent to client \n"+ string(packetwindow[i]));
-			logEvents("Server","Sent request packet sequence to client: "+ packetseq);
-			i = (i+1) % MAX_PACKET_SEQ;
-				packetstosend--;
-		}
-	}
+
+
+
+	//	int i=send_base;
+
 
 	while(!acknowledged)
 	{
@@ -967,13 +965,24 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 		}
 		else
 		{
-			acknowledged = true;
-			logEvents("DEBUG","in else of if handshakerequest");
+			logEvents("Debug","packetstosend: "+to_string(packetstosend));
+			while(packetstosend!=0)
+			{
+				logEvents("DEBUG","i =: "+to_string(i));
+				if((ibytessent = sendto(socket,packetwindow[i], sentbytes[i],0,(LPSOCKADDR)&socketaddr,socketlength)) == SOCKET_ERROR)
+					throw SEND_FAILED_MSG;
+				totalbytessent = totalbytessent  + ibytessent ;
+				cout<<"Sent request packet sequence to client: "<<i<<endl;
+				//		cout<<"Request data sent to client: "<<sendbuffer<<endl;
+				logEvents("Server","Data sent to client \n"+ string(packetwindow[i]));
+				logEvents("Server","Sent request packet sequence to client: "+ i);
+				i = (i+1) % MAX_PACKET_SEQ;
+				packetstosend--;
+			}
 		}
 		if(receiveAck( socket , socketaddr, packetseq, socketlength))
 		{
-			logEvents("Server", "Received ACK for packet "+to_string(packetseq));
-			cout<<"Received ACK for packet "+to_string(packetseq)<<endl;
+
 			acknowledged = true;
 		}
 	}
@@ -1001,7 +1010,25 @@ bool receiveAck(SOCKET socket , SOCKADDR_IN socketaddr,int packetseq, int socket
 				throw RECV_FAILED_MSG;
 
 			if(!threewayhandshakecomplete)
-				ackrcvdforpkt = stoi(string(recvbuffer).substr(0,to_string(packetseq).length()).c_str());
+			{
+				if(string(recvbuffer).find("-")==0)
+				{
+					cout<<"Received NAK for packet "<<packetseq<<endl;
+					logEvents("Server","Received NAK for packet: "+to_string(packetseq));
+					return false;
+				}
+				else
+				{
+					rcvdacknowledgementmsg = string(recvbuffer).substr(to_string(packetseq).length(),strlen(recvbuffer)).c_str();
+					threewayhandshakecomplete = true;
+					cout<<"Received ACK for packet sequence from client: "<<ackrcvdforpkt<<endl;
+					logEvents("Server","Connection Established.\nACK Data received from client \n"+ string(recvbuffer));	
+					cout<<"Connection Established"<<endl;
+					return true;
+					//						ackrcvdforpkt = stoi(string(recvbuffer).substr(0,to_string(packetseq).length()).c_str());
+				}
+
+			}
 			else
 				ackrcvdforpkt = stoi(string(recvbuffer).substr(0,3).c_str());
 
@@ -1011,23 +1038,16 @@ bool receiveAck(SOCKET socket , SOCKADDR_IN socketaddr,int packetseq, int socket
 			//check Ack/NAK
 			if(ackrcvdforpkt >=0)
 			{
-
-				if(!threewayhandshakecomplete)
-				{
-					rcvdacknowledgementmsg = string(recvbuffer).substr(to_string(packetseq).length(),strlen(recvbuffer)).c_str();
-					threewayhandshakecomplete = true;
-					cout<<"Connection Established"<<endl;
-				}
-				else
-				{
-					//					serverpktseq = (serverpktseq+1) % MAX_PACKET_SEQ;
-					send_base = (ackrcvdforpkt+1) % MAX_PACKET_SEQ;
-					if(send_base > ackrcvdforpkt)
-						available_window =available_window + WINDOW_SIZE-send_base+ackrcvdforpkt + 1;
-					else if(send_base <= ackrcvdforpkt)
-						available_window =available_window + ackrcvdforpkt - send_base + 1;
-				}
+				//					serverpktseq = (serverpktseq+1) % MAX_PACKET_SEQ;		
+				if(send_base > ackrcvdforpkt)
+					available_window =available_window + WINDOW_SIZE-send_base+ackrcvdforpkt + 1;
+				else if(send_base <= ackrcvdforpkt)
+					available_window =available_window + ackrcvdforpkt - send_base + 1;
 				logEvents("DEBUG","available_window after recv: "+to_string(available_window));
+				send_base = (ackrcvdforpkt+1) % MAX_PACKET_SEQ;
+				logEvents("DEBUG","New send_base: "+to_string(send_base));
+				if(lastpackettoacked = ackrcvdforpkt)
+					lastpacketacknowledged = true;
 				return true;
 			}
 			else
