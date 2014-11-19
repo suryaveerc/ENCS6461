@@ -381,7 +381,7 @@ void ftpGET(string argument)
 			int rcvdpktnumberforclient = -1;
 			int rcvdpktnumberforserver = -1 ;
 			int writeCounter = 0;
-			int extrabytes = 4;
+			int extrabytes = 6;
 			char *recvbuff = new char[packetLengthInBytes];
 			time_t start = time(0);
 			int totalBytes = 0;
@@ -390,7 +390,7 @@ void ftpGET(string argument)
 				cout<<szbuffer<<endl;
 				if(!ack)
 				{
-					if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
+						if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
 						throw SEND_FAILED_MSG;
 					logEvents("GET","Sent request to server: "+string(szbuffer));
 				}
@@ -412,9 +412,9 @@ void ftpGET(string argument)
 					{
 						if((ibytesrecv = recvfrom(clientSocket,recvbuff,packetLengthInBytes+extrabytes,0,(LPSOCKADDR)&serverSocketAddr,&socketlen))==SOCKET_ERROR)
 							throw RECV_FAILED_MSG;
-						logEvents("GET","Data received from server \n"+ string(recvbuff));
-						rcvdpktnumberforclient = stoi(string(recvbuff).substr(0,2).c_str());
-						rcvdpktnumberforserver = stoi(string(recvbuff).substr(2,2).c_str());
+						//logEvents("GET","Data received from server \n"+ string(recvbuff));
+						rcvdpktnumberforclient = stoi(string(recvbuff).substr(0,3).c_str());
+						rcvdpktnumberforserver = stoi(string(recvbuff).substr(3,3).c_str());
 						logEvents("GET","rcvdpktnumberforclient: "+ to_string(rcvdpktnumberforclient));
 						logEvents("GET","rcvdpktnumberforserver:"+ to_string(rcvdpktnumberforserver));
 						if(checkSequence(clientpktseq,rcvdpktnumberforclient))
@@ -423,16 +423,17 @@ void ftpGET(string argument)
 							cout<<"Received packet sequence from server"<<rcvdpktnumberforclient<<endl;
 							logEvents("GET","Received packet sequence from server" +to_string(rcvdpktnumberforclient));
 							bool expectedserverpkt = checkSequence(serverpktseq,rcvdpktnumberforserver);
-							sendAck(clientSocket,serverSocketAddr,rcvdpktnumberforserver,socketlen);
+							
 							if(expectedserverpkt)
 							{
+								sendAck(clientSocket,serverSocketAddr,rcvdpktnumberforserver,socketlen);
 								++writeCounter;
 								cout<<"Total packets received "<<writeCounter<<endl;
 								logEvents("Get","Total packets received "+to_string(writeCounter));
 								char *writebuff = recvbuff+extrabytes; //this will ignore the first byte
 								totalBytes = totalBytes + ibytesrecv;
-								  logEvents("Break ","---------------------------------------------------------------------");
-									logEvents("GET", "Bytes received from server in "+ to_string(writeCounter) +string("request: ") +  to_string(ibytesrecv));
+								logEvents("Break ","---------------------------------------------------------------------");
+								logEvents("GET", "Bytes received from server in "+ to_string(writeCounter) +string("request: ") +  to_string(ibytesrecv));
 								if(string(writebuff).find("FIN")==0)
 								{
 									time_t end = time(0);
@@ -453,7 +454,7 @@ void ftpGET(string argument)
 								logEvents("Client","Discarding the wrong Packet.\nExpecting packet:"+to_string(serverpktseq)+"\nReceived packet: "+to_string(rcvdpktnumberforclient));
 								memset(szbuffer,'\0',packetLengthInBytes);
 								stringstream paddedseq;
-								paddedseq <<setfill('0')<<setw(2)<<serverpktseq*-1;
+								paddedseq <<setfill('0')<<setw(3)<<serverpktseq*-1;
 								string seqs = paddedseq.str();
 								paddedseq.str("");
 								sprintf(szbuffer,seqs.c_str());
@@ -484,11 +485,8 @@ void ftpGET(string argument)
 						else
 							if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
 								throw SEND_FAILED_MSG;
-
 					}
 				}
-
-
 			}
 		}
 		else

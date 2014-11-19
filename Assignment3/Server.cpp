@@ -69,7 +69,7 @@ int packetstosend;
 int available_window = WINDOW_SIZE;
 int next_pktseq = 0;
 int seqlength = 1;
-int lastpackettoacked;
+int lastpackettoacked= -1;
 string *commandLineArguments;
 const int num_threads = 5;
 bool threewayhandshakecomplete = false;
@@ -492,7 +492,7 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 			logEvents("GET", "Sending file " + directory +" to client");
 			int readCounter = 0;
 			int totalBytes = 0;
-			int extrabytes = 4;
+			int extrabytes = 6;
 			stringstream paddedseq;
 			bool docontinue = true;
 			int arrayindex = serverpktseq;
@@ -500,10 +500,10 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 			while(docontinue)
 			{
 				int bytesToSend  = 0;
-				paddedseq <<setfill('0')<<setw(2)<<clientpktseq;
+				paddedseq <<setfill('0')<<setw(3)<<clientpktseq;
 				string seqc = paddedseq.str();
 				paddedseq.str("");
-				paddedseq <<setfill('0')<<setw(2)<<serverpktseq;
+				paddedseq <<setfill('0')<<setw(3)<<serverpktseq;
 				string seqs = paddedseq.str();
 				paddedseq.str("");
 				char *tempbuff = {0};
@@ -517,7 +517,7 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 					memset(tempbuff,'\0',bytesToSend+extrabytes);
 					strcpy(tempbuff,(seqc+seqs+to_string(fsize)).c_str());
 					memcpy(tempbuff+extrabytes,sendbuff,bytesToSend);
-					logEvents("Debug",tempbuff);
+			//		logEvents("Debug",tempbuff);
 					remainingBytesToSend = remainingBytesToSend - bytesToSend;
 				}
 				else
@@ -547,6 +547,7 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 					packetstosend++;
 					if(!docontinue)
 					{
+						lastpackettoacked = serverpktseq;
 						nodatatoread = true;
 					}
 					serverpktseq = (serverpktseq +1) % MAX_PACKET_SEQ;
@@ -979,8 +980,8 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 				totalbytessent = totalbytessent  + ibytessent ;
 				cout<<"Sent request packet sequence to client: "<<i<<endl;
 				//		cout<<"Request data sent to client: "<<sendbuffer<<endl;
-				logEvents("Server","Data sent to client \n"+ string(packetwindow[i]));
-				logEvents("Server","Sent request packet sequence to client: "+ i);
+//				logEvents("Server","Data sent to client \n"+ string(packetwindow[i]));
+				logEvents("Server","Sent request packet sequence to client: "+ to_string(i));
 				i = (i+1) % window;
 				packetstosend--;
 			}
@@ -989,8 +990,8 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 		{
 			acknowledged = true;
 		}
-		else
-			if(nodatatoread)
+		
+			if(nodatatoread && !lastpacketacknowledged)
 				acknowledged = false; //continue within this while loop to send data from array.
 	}
 	return totalbytessent ;
@@ -1057,7 +1058,10 @@ bool receiveAck(SOCKET socket , SOCKADDR_IN socketaddr,int packetseq, int socket
 					}
 					logEvents("DEBUG","available_window after recv: "+to_string(available_window));
 					send_base = (ackrcvdforpkt+1) % MAX_PACKET_SEQ;
-					logEvents("DEBUG","New send_base: "+to_string(send_base));
+					logEvents("DEBUG","New send_base: "+to_string(send_base)+" lastpackettoacked: "+to_string(lastpackettoacked));
+
+					if(lastpackettoacked==ackrcvdforpkt)
+						lastpacketacknowledged=true;
 					return true;
 				}
 				else
