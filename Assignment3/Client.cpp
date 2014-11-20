@@ -362,7 +362,7 @@ void ftpGET(string argument)
 			else
 			{
 				stringstream paddedseq;
-				paddedseq <<setfill('0')<<setw(2)<<clientpktseq;
+				paddedseq <<setfill('0')<<setw(3)<<clientpktseq;
 				string seq = paddedseq.str();
 				paddedseq.str("");
 				sprintf(szbuffer,string(szbuffer).insert(0,seq).c_str());
@@ -387,7 +387,6 @@ void ftpGET(string argument)
 			int totalBytes = 0;
 			while(!(ack && transfercomplete))
 			{
-				cout<<szbuffer<<endl;
 				if(!ack)
 				{
 						if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)

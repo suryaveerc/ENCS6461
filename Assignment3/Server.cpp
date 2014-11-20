@@ -188,7 +188,7 @@ void acceptUserConnections()
 			clientpktseq = (randomnumber & 1);
 			serverpktseq = (atoi(szbuffer) & 1);
 			send_base = serverpktseq;
-			i = send_base ;
+			//i = send_base ;
 			strcat(szbuffer,to_string(randomnumber).c_str());
 			cout<<"Step2: Sending handshake msg to client: "<<szbuffer<<endl;
 			logEvents("Server", "Step2: Sending handshake msg to client: "+string(szbuffer));
@@ -246,13 +246,14 @@ void handleUserConnection(SOCKET clientSocket)
 				if(ibytesrecv == SOCKET_ERROR)
 					throw "Receive error in server program. Possible reason may be conncetion closed by client.\n";
 				cout<<localbuffer<<endl;
-				recvdpktnum = string(localbuffer).at(1) - 48;
+				recvdpktnum = stoi(string(localbuffer).substr(0,3));
+				// recvdpktnum = string(localbuffer).at(1) - 48;
 				cout<<recvdpktnum ;
 				//cout<<"recvdpktnum "<<recvdpktnum<<endl;
-				userrequest = string(localbuffer).erase(0,1); 
+				userrequest = string(localbuffer).erase(0,3); 
 			}
 			if(!handshakerequest && !checkSequence(clientpktseq, recvdpktnum))
-			{
+			{ 
 				cout<<"Discarded wrong packet"<<endl;
 				logEvents("Server", "Discarded wrong packet");
 			}
@@ -260,7 +261,6 @@ void handleUserConnection(SOCKET clientSocket)
 			{
 				if(handshakerequest)
 				{
-					//					ignoretheack = true;
 					userrequest = rcvdacknowledgementmsg;
 				}
 				cout << "This is message from client: " << userrequest << endl;
@@ -495,7 +495,8 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 			int extrabytes = 6;
 			stringstream paddedseq;
 			bool docontinue = true;
-			int arrayindex = serverpktseq;
+			int arrayindex = i;
+
 
 			while(docontinue)
 			{
@@ -516,8 +517,9 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 					tempbuff = new char[bytesToSend+extrabytes];
 					memset(tempbuff,'\0',bytesToSend+extrabytes);
 					strcpy(tempbuff,(seqc+seqs+to_string(fsize)).c_str());
+					logEvents("Debug",tempbuff);
 					memcpy(tempbuff+extrabytes,sendbuff,bytesToSend);
-			//		logEvents("Debug",tempbuff);
+//					logEvents("Debug",tempbuff);
 					remainingBytesToSend = remainingBytesToSend - bytesToSend;
 				}
 				else
@@ -537,13 +539,7 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 					next_pktseq = serverpktseq;	
 					sentbytes[arrayindex] = bytesToSend+extrabytes;
 					packetwindow[arrayindex] = tempbuff;
-
-					//next_pktseq = (next_pktseq+1) % MAX_PACKET_SEQ;
-
-					logEvents("DEBUG","available_window before send : "+to_string(available_window));
-
 					available_window--;
-
 					packetstosend++;
 					if(!docontinue)
 					{
@@ -551,11 +547,11 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 						nodatatoread = true;
 					}
 					serverpktseq = (serverpktseq +1) % MAX_PACKET_SEQ;
-					logEvents("DEBUG","Current WINDOW_SIZE: "+to_string(WINDOW_SIZE));
 					arrayindex = (arrayindex + 1) % window ;
-					logEvents("DEBUG","Current arrayindex: "+to_string(arrayindex));
+					logEvents("DEBUG","Current available window position: "+to_string(arrayindex));
 					logEvents("DEBUG","next_pktseq: "+to_string(serverpktseq));
 					logEvents("DEBUG","Packets to send : "+to_string(packetstosend));
+					logEvents("DEBUG","available_window before send : "+to_string(available_window));
 				}
 				if((available_window == 0) || (docontinue==false))
 				{
@@ -567,7 +563,6 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 				
 			}
 			time_t end = time(0);
-
 			cout<<"Sent "<<to_string(readCounter)<<" packets for "<<totalBytes<< " bytes in "<<difftime(end,start)<<" seconds"<<endl;
 			logEvents("GET","Transfer complete. Sent "+to_string(readCounter) +" packets for " + to_string(fsize) +" bytes in " + to_string(difftime(end,start)) +" seconds");
 		}
@@ -599,6 +594,9 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 		LocalFree(Error);
 	}
 	clientpktseq = (clientpktseq + 1) % MAX_PACKET_SEQ;
+	lastpacketacknowledged = false;
+	lastpackettoacked = -1;
+	nodatatoread = false;
 }
 void ftpPUT(string sourceFile,unsigned int fsize, string directory, SOCKET clientSocket)
 {
@@ -974,14 +972,15 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 			logEvents("Debug","packetstosend: "+to_string(packetstosend));
 			while(packetstosend!=0)
 			{
-				logEvents("DEBUG","i =: "+to_string(i));
+				packetseq = stoi(string(packetwindow[i]).substr(3,3));
+				logEvents("DEBUG","Current sending window position=: "+to_string(i));
 				if((ibytessent = sendto(socket,packetwindow[i], sentbytes[i],0,(LPSOCKADDR)&socketaddr,socketlength)) == SOCKET_ERROR)
 					throw SEND_FAILED_MSG;
 				totalbytessent = totalbytessent  + ibytessent ;
-				cout<<"Sent request packet sequence to client: "<<i<<endl;
-				//		cout<<"Request data sent to client: "<<sendbuffer<<endl;
-//				logEvents("Server","Data sent to client \n"+ string(packetwindow[i]));
-				logEvents("Server","Sent request packet sequence to client: "+ to_string(i));
+				cout<<"Sent request packet sequence to client: "<<packetseq<<endl;
+//				cout<<"Request data sent to client: "<<sendbuffer<<endl;
+				logEvents("Server","Data sent to client \n"+ string(packetwindow[i]));
+				logEvents("Server","Sent request packet sequence to client: "+ packetseq);
 				i = (i+1) % window;
 				packetstosend--;
 			}
@@ -990,9 +989,8 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 		{
 			acknowledged = true;
 		}
-		
-			if(nodatatoread && !lastpacketacknowledged)
-				acknowledged = false; //continue within this while loop to send data from array.
+		if(nodatatoread && !lastpacketacknowledged)
+			acknowledged = false; //continue within this while loop to send data from array.
 	}
 	return totalbytessent ;
 }
@@ -1045,21 +1043,20 @@ bool receiveAck(SOCKET socket , SOCKADDR_IN socketaddr,int packetseq, int socket
 				//check Ack/NAK
 				if(ackrcvdforpkt >=0)
 				{
-					//					serverpktseq = (serverpktseq+1) % MAX_PACKET_SEQ;		
+					//serverpktseq = (serverpktseq+1) % MAX_PACKET_SEQ;		
 					if(send_base > ackrcvdforpkt)
 					{
-						logEvents("Debug>","\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+"\navailable_window: "+to_string(available_window)+"\nsend_base: "+to_string(send_base)+"\nackrcvdforpkt: "+to_string(ackrcvdforpkt));
+						logEvents("Debug>","\t\t\t\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+" available_window: "+to_string(available_window)+" send_base: "+to_string(send_base)+" ackrcvdforpkt: "+to_string(ackrcvdforpkt));
 						available_window =available_window + WINDOW_SIZE-send_base+ackrcvdforpkt + 1;
 					}
 					else if(send_base <= ackrcvdforpkt)
 					{
-						logEvents("Debug<=","\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+"\navailable_window: "+to_string(available_window)+"\nsend_base: "+to_string(send_base)+"\nackrcvdforpkt: "+to_string(ackrcvdforpkt));
+						logEvents("Debug<=","\t\t\t\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+" available_window: "+to_string(available_window)+" send_base: "+to_string(send_base)+" ackrcvdforpkt: "+to_string(ackrcvdforpkt));
 						available_window =available_window + ackrcvdforpkt - send_base + 1;
 					}
 					logEvents("DEBUG","available_window after recv: "+to_string(available_window));
 					send_base = (ackrcvdforpkt+1) % MAX_PACKET_SEQ;
 					logEvents("DEBUG","New send_base: "+to_string(send_base)+" lastpackettoacked: "+to_string(lastpackettoacked));
-
 					if(lastpackettoacked==ackrcvdforpkt)
 						lastpacketacknowledged=true;
 					return true;
