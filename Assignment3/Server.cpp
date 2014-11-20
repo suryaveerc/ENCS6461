@@ -70,14 +70,15 @@ int available_window = WINDOW_SIZE;
 int next_pktseq = 0;
 int seqlength = 1;
 int lastpackettoacked= -1;
+bool lastpacketacknowledged = false ; 
+bool nodatatoread = false;
+int window = WINDOW_SIZE;
+
 string *commandLineArguments;
 const int num_threads = 5;
 bool threewayhandshakecomplete = false;
 bool handshakerequest = true;
 bool correctpktrcvd = false;
-bool lastpacketacknowledged = false ; 
-bool nodatatoread = false;
-int window = WINDOW_SIZE;
 // defined methods
 string trim(string );
 void initializeSockets();
@@ -373,7 +374,6 @@ void parseCommand(string userInput)
 	if(strlen(userInput.c_str()) > 0 && pos <= 0)
 		commandLineArguments[count]=userInput;
 }
-
 string trim(string arg)
 {
 	const string whitespace = " \t\f\v\n\r";
@@ -383,7 +383,6 @@ string trim(string arg)
 	arg.erase((end - start) + 1);
 	return arg;
 }
-
 void ftpLIST(string directory, SOCKET clientSocket)
 {
 	try
@@ -396,10 +395,10 @@ void ftpLIST(string directory, SOCKET clientSocket)
 			system(string("dir \"" + directory + "\" /b /o:gn > c:\\logs\\list.txt").c_str());
 
 			logEvents("LIST","Opening file to read the dir contents.");
-			const int maxByteToSent = 1021;
+			const int maxByteToSent = 1024-7;
 			//array to send to client. +1 to add sentinel character.
-			char *buff= new char[maxByteToSent + 1];
-			memset(buff,'\0',maxByteToSent+1);
+//			char *buff= new char[maxByteToSent + 1];
+//			memset(buff,'\0',maxByteToSent+1);
 
 			ifstream ifs("c:\\logs\\list.txt",ios::in);
 			ifs.seekg(0,ifs.end);
@@ -411,26 +410,71 @@ void ftpLIST(string directory, SOCKET clientSocket)
 			int bytesRead = ifs.gcount();
 			ifs.close();
 			remove("c:\\temp\\list.txt");
+
 			logEvents("LIST","File closed and removed.");
 			int totalbytessent = 0;
-			while(bytesRead >= totalbytessent)
-			{
-				int remainingBytes = bytesRead - totalbytessent;
-				int bytesToSend= remainingBytes > maxByteToSent ? maxByteToSent : remainingBytes ;
-				memset(buff,'\0',maxByteToSent+3);
-				strcpy(buff,(to_string(clientpktseq)+to_string(serverpktseq)).c_str());
-				memcpy(buff+2, listBuffer+totalbytessent,bytesToSend); //copy the number of bytes to be sent to buff.
-				if((ibytessent = sendRequest(clientSocket,clientSocketAddr,buff,serverpktseq,senderAddrSize,maxByteToSent+2)) != SOCKET_ERROR) // send to client.
-					totalbytessent =totalbytessent + (ibytessent -1);
+			stringstream paddedseq;
+			bool docontinue = true;
+			int arrayindex = i;
+			int extrabytes = 6;
+			int remainingBytes =bytesRead;
+			while(docontinue)
+			{ 
+				int bytesToSend  = 0;
+				paddedseq <<setfill('0')<<setw(3)<<clientpktseq;
+				string seqc = paddedseq.str();
+				paddedseq.str("");
+				paddedseq <<setfill('0')<<setw(3)<<serverpktseq;
+				string seqs = paddedseq.str();
+				paddedseq.str("");
+				char *tempbuff = {0};
+				if(remainingBytes >0)
+				{
+					//remainingBytes = bytesRead - totalbytessent;
+					bytesToSend= remainingBytes > maxByteToSent ? maxByteToSent : remainingBytes ;
+					tempbuff = new char[maxByteToSent+extrabytes+1];
+					memset(tempbuff,'\0',maxByteToSent+extrabytes+1);
+					strcpy(tempbuff,(seqc+seqs).c_str());
+					memcpy(tempbuff+extrabytes, listBuffer+totalbytessent,bytesToSend); //copy the number of bytes to be sent to buff.
+					logEvents("Debug",tempbuff);
+					remainingBytes = remainingBytes  - bytesToSend;
+				}
 				else
-					throw SEND_FAILED_MSG;
+				{
+					bytesToSend = strlen(endpacketmarker);
+					tempbuff = new char[strlen(endpacketmarker)+extrabytes];
+					memset(tempbuff,'\0',strlen(endpacketmarker)+extrabytes);
+					strcpy(tempbuff,(seqc+seqs).c_str());
+					memcpy(tempbuff+extrabytes, endpacketmarker,6);// To indicate transfer finish.
+					logEvents("Debug",tempbuff);
+					docontinue = false;
+				}
+				if((available_window > 0) || (docontinue==false))
+				{
+					next_pktseq = serverpktseq;	
+					sentbytes[arrayindex] = bytesToSend+extrabytes;
+					packetwindow[arrayindex] = tempbuff;
+					available_window--;
+					packetstosend++;
+					if(!docontinue)
+					{
+						lastpackettoacked = serverpktseq;
+						nodatatoread = true;
+					}
+					serverpktseq = (serverpktseq +1) % MAX_PACKET_SEQ;
+					arrayindex = (arrayindex + 1) % window ;
+					logEvents("DEBUG","Current available window position: "+to_string(arrayindex));
+					logEvents("DEBUG","next_pktseq: "+to_string(serverpktseq));
+					logEvents("DEBUG","Packets to send : "+to_string(packetstosend));
+					logEvents("DEBUG","available_window before send : "+to_string(available_window));
+				}
+				if((available_window == 0) || (docontinue==false))
+				{
+					ibytessent = sendRequest(clientSocket,clientSocketAddr,tempbuff,serverpktseq,senderAddrSize, bytesToSend+extrabytes);
+					packetstosend =0;
+					//			totalBytes = totalBytes + ibytessent;
+				}
 			}
-			strcpy(buff,(to_string(clientpktseq)+to_string(serverpktseq)).c_str());
-			memcpy(buff+2, endpacketmarker,6);// To indicate transfer finish.
-			if(sendRequest(clientSocket,clientSocketAddr,buff,serverpktseq,senderAddrSize,strlen(endpacketmarker)+2) == SOCKET_ERROR)
-				throw SEND_FAILED_MSG;
-			else
-				logEvents("LIST","Request completed successfully");
 		}
 		else
 		{
@@ -457,7 +501,11 @@ void ftpLIST(string directory, SOCKET clientSocket)
 		}
 		LocalFree(Error);
 	}
-	clientpktseq = (clientpktseq + 1) % MAX_PACKET_SEQ;
+		clientpktseq = (clientpktseq + 1) % MAX_PACKET_SEQ;
+	lastpacketacknowledged = false;
+	lastpackettoacked = -1;
+	nodatatoread = false;
+
 }
 
 void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
@@ -519,7 +567,7 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 					strcpy(tempbuff,(seqc+seqs+to_string(fsize)).c_str());
 					logEvents("Debug",tempbuff);
 					memcpy(tempbuff+extrabytes,sendbuff,bytesToSend);
-//					logEvents("Debug",tempbuff);
+					//					logEvents("Debug",tempbuff);
 					remainingBytesToSend = remainingBytesToSend - bytesToSend;
 				}
 				else
@@ -560,7 +608,7 @@ void ftpGET(string sourceFile, string directory, SOCKET clientSocket)
 					totalBytes = totalBytes + ibytessent;
 				}
 				++readCounter;
-				
+
 			}
 			time_t end = time(0);
 			cout<<"Sent "<<to_string(readCounter)<<" packets for "<<totalBytes<< " bytes in "<<difftime(end,start)<<" seconds"<<endl;
@@ -627,17 +675,18 @@ void ftpPUT(string sourceFile,unsigned int fsize, string directory, SOCKET clien
 			time_t start = time(0);
 			int totalBytes = 0;
 			int rcvdpktnumber = -1;
+			int extrabytes = 3;
 
 			while(remainingBytesToRead > 0)
 			{
 				int bytesToRecv = packetLengthInBytes < remainingBytesToRead ? packetLengthInBytes :remainingBytesToRead;
-				recvbuff = new char[bytesToRecv+1];
-				memset(recvbuff,'\0',bytesToRecv+1);
+				recvbuff = new char[bytesToRecv+extrabytes];
+				memset(recvbuff,'\0',bytesToRecv+extrabytes);
 				correctpktrcvd = false;
 				while(!correctpktrcvd)
 				{
-					ibytesrecv = recvfrom(clientSocket,recvbuff,bytesToRecv+1,0,(LPSOCKADDR)&clientSocketAddr,&senderAddrSize);
-					rcvdpktnumber = string(recvbuff).at(0) - 48;
+					ibytesrecv = recvfrom(clientSocket,recvbuff,bytesToRecv+extrabytes,0,(LPSOCKADDR)&clientSocketAddr,&senderAddrSize);
+					rcvdpktnumber = stoi(string(recvbuff).substr(0,3));
 					sendAck(clientSocket,clientSocketAddr,rcvdpktnumber,senderAddrSize);
 				}
 				if(ibytesrecv !=SOCKET_ERROR)
@@ -645,7 +694,7 @@ void ftpPUT(string sourceFile,unsigned int fsize, string directory, SOCKET clien
 					++writeCounter;
 					cout<<"Total packets received "<<writeCounter<<endl;
 					remainingBytesToRead = remainingBytesToRead - bytesToRecv;
-					char *writebuff = recvbuff+1; 
+					char *writebuff = recvbuff+extrabytes; 
 					totalBytes = totalBytes + ibytesrecv;
 					logEvents("Break ","---------------------------------------------------------------------");
 					logEvents("GET", "Bytes received from server in "+ to_string(writeCounter) +string(" request: ") +  to_string(ibytesrecv));
@@ -876,7 +925,6 @@ void cleanUp()
 	logEvents("SERVER", "Closed. Performing cleanup...");
 	WSACleanup();
 }
-
 void logEvents(string tag, string eventDescription)
 {
 	try{
@@ -924,10 +972,13 @@ void sendAck(SOCKET socket , SOCKADDR_IN socketaddr, int pktnumberrcvd,  int soc
 	correctpktrcvd = checkSequence(clientpktseq,pktnumberrcvd);
 
 	//	itoa((correctpktrcvd ? pktnumberrcvd :serverpktseq),sendbuffer,10);
-	itoa(pktnumberrcvd,sendbuffer,10);
+	//itoa(pktnumberrcvd,sendbuffer,10);
+	stringstream paddedseq;
+	paddedseq <<setfill('0')<<setw(3)<<pktnumberrcvd;
+	string seq = paddedseq.str();
+	paddedseq.str("");
+	strcpy(sendbuffer,seq.c_str());
 	strcat(sendbuffer,sentacknowledgementmsg.c_str());
-
-
 
 	if(sendto(socket,sendbuffer,packetLengthInBytes,0,(LPSOCKADDR)&socketaddr,socketlength) ==  SOCKET_ERROR)
 		throw SEND_FAILED_MSG;
@@ -948,12 +999,10 @@ void sendAck(SOCKET socket , SOCKADDR_IN socketaddr, int pktnumberrcvd,  int soc
 	}
 	sentacknowledgementmsg = '\0';
 }
-
 bool checkSequence(int previouspktnumber, int ackrcvdforpkt)
 {
 	return previouspktnumber == ackrcvdforpkt ? true :false;
 }
-
 int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int packetseq, int socketlength, int bytesToSend)
 {
 	int retrycount = 0;
@@ -978,7 +1027,7 @@ int sendRequest(SOCKET socket , SOCKADDR_IN socketaddr, char *sendbuffer, int pa
 					throw SEND_FAILED_MSG;
 				totalbytessent = totalbytessent  + ibytessent ;
 				cout<<"Sent request packet sequence to client: "<<packetseq<<endl;
-//				cout<<"Request data sent to client: "<<sendbuffer<<endl;
+				//				cout<<"Request data sent to client: "<<sendbuffer<<endl;
 				logEvents("Server","Data sent to client \n"+ string(packetwindow[i]));
 				logEvents("Server","Sent request packet sequence to client: "+ packetseq);
 				i = (i+1) % window;
