@@ -12,11 +12,12 @@ char* getmessage(char *);
 #include <time.h>
 #include <sstream>
 #include <iomanip>
+#include <io.h>
 using namespace std;
 //user defined port number
 #define REQUEST_PORT 7000
 #define TIMEOUT_USEC 900000
-#define TIMEOUT_SEC 10000
+#define TIMEOUT_SEC 5
 #define MAX_RETRIES 3000			
 #define MAX_PACKET_SEQ 4
 #define WINDOW_SIZE MAX_PACKET_SEQ-1
@@ -84,6 +85,7 @@ void ftpPUT(string);
 void ftpLCD(string);
 void ftpCD(string);
 void ftpDELETE(string);
+void ftpRENAME(string);
 void logEvents(string, string);
 void cleanUp();
 void ftpQUIT();
@@ -216,6 +218,7 @@ int main(void){
 
 			string command = commandLineTokens[0];
 			string argument = commandLineTokens[1];
+			string argument2 = commandLineTokens[2];
 			string commandToServer = command + " " + argument;
 
 			sprintf(szbuffer,commandToServer.c_str(),0);
@@ -286,6 +289,26 @@ int main(void){
 				commandToServer = command+" "+argument;
 				sprintf(szbuffer,commandToServer.c_str(),0);
 				ftpDELETE(argument);
+			}
+			else if(strcmpi(command.c_str(),"RENAME")==0)
+			{
+				logEvents("RENAME", "Request from user --" + userCommand);
+				while(strlen(argument.c_str())==0)
+				{
+					cout<<"Please provide a filename to rename: ";
+					cin>>argument;
+					argument = trim(argument);
+				}
+				commandToServer = command+" "+argument;
+				while(strlen(argument2.c_str())==0)
+				{
+					cout<<"Please provide a new filename: ";
+					cin>>argument2;
+					argument2 = trim(argument);
+				}
+				commandToServer = commandToServer+" "+argument2;
+				sprintf(szbuffer,commandToServer.c_str(),0);
+				ftpRENAME(argument);
 			}
 			else if(strcmpi(command.c_str(),"QUIT")==0)
 			{
@@ -360,155 +383,186 @@ void ftpGET(string argument)
 	argument = argument.substr(last_index_of_slash+1, argument.length());
 	int ackrcvdforpkt = 0;
 	int retrycount = 0;
-
+	int result = -1;
 	bool acknowledged = false;
+
 
 	try
 	{
-		ofstream file(argument, ios::out | ios::trunc | ios::binary);
-
-		if(file)
+		if(access(argument.c_str(),0) != -1)
 		{
+			cout<<"File already exists. Want to overwrite? Waiting for client response..."<<endl;
+			string input = "";
+			while(input.length()<=0)
+				getline(cin,input);
 
-			if(!threewayhandshakecomplete)
-			{
-				sprintf(szbuffer,string(szbuffer).insert(0,rcvdacknowledgementmsg).c_str());
-			}
-			else
-			{
-				stringstream paddedseq;
-				paddedseq <<setfill('0')<<setw(3)<<clientpktseq;
-				string seq = paddedseq.str();
-				paddedseq.str("");
-				sprintf(szbuffer,string(szbuffer).insert(0,seq).c_str());
-			}
-
-			if(!threewayhandshakecomplete)
-			{
-				threewayhandshakecomplete = true;
-				cout<<"Connection Established"<<endl;
-				logEvents("CLIENT", "Threeway handshake with server complete.");
-			}
-
-
-			bool ack = false;
-			bool transfercomplete = false;
-			int rcvdpktnumberforclient = -1;
-			int rcvdpktnumberforserver = -1 ;
-			int writeCounter = 0;
-			int extrabytes = 6;
-			char *recvbuff = new char[packetLengthInBytes];
-			time_t start = time(0);
-			int totalBytes = 0;
-			while(!(ack && transfercomplete))
-			{
-				if(!ack)
+			if(input.compare("Y")==0)
+			{		
+				input = "";
+				cout<<"Enter new file name";
+				while(input.length()<=0)
+					getline(cin,input);
+				result= rename( argument.c_str() , input.c_str() );
+				if(result == 0)
 				{
-					if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
-						throw SEND_FAILED_MSG;
-					logEvents("GET","Sent request to server: "+string(szbuffer));
+					argument = input;
+					cout<<"File renamed"<<endl;
+					logEvents("Client","File renamed");
+				}
+				else
+				{
+					cout<<strerror(errno);
+					logEvents("Client",strerror(errno));
+				}
+			}
+		}
+		if(result == 0)
+		{
+			ofstream file(argument, ios::out | ios::trunc | ios::binary);
+
+			if(file)
+			{
+
+				if(!threewayhandshakecomplete)
+				{
+					sprintf(szbuffer,string(szbuffer).insert(0,rcvdacknowledgementmsg).c_str());
+				}
+				else
+				{
+					stringstream paddedseq;
+					paddedseq <<setfill('0')<<setw(3)<<clientpktseq;
+					string seq = paddedseq.str();
+					paddedseq.str("");
+					sprintf(szbuffer,string(szbuffer).insert(0,seq).c_str());
 				}
 
-				recvbuff = new char[packetLengthInBytes+extrabytes];
-				memset(recvbuff,'\0',packetLengthInBytes+extrabytes);
-				correctpktrcvd = false;
-				while(!correctpktrcvd)
+				if(!threewayhandshakecomplete)
 				{
-					struct timeval *timeout = new timeval;
-					timeout->tv_sec=TIMEOUT_SEC;
-					timeout->tv_usec=0;
-					FD_ZERO(&readfds);
-					FD_SET(clientSocket,&readfds);
-					int i = 1;
-					if(!ack)
-						i = select(1,&readfds,NULL,NULL,timeout);
-					if(i)
-					{
-						if((ibytesrecv = recvfrom(clientSocket,recvbuff,packetLengthInBytes+extrabytes,0,(LPSOCKADDR)&serverSocketAddr,&socketlen))==SOCKET_ERROR)
-							throw RECV_FAILED_MSG;
-						//logEvents("GET","Data received from server \n"+ string(recvbuff));
-						rcvdpktnumberforclient = stoi(string(recvbuff).substr(0,3).c_str());
-						rcvdpktnumberforserver = stoi(string(recvbuff).substr(3,3).c_str());
-						logEvents("GET","rcvdpktnumberforclient: "+ to_string(rcvdpktnumberforclient));
-						logEvents("GET","rcvdpktnumberforserver:"+ to_string(rcvdpktnumberforserver));
-						if(checkSequence(clientpktseq,rcvdpktnumberforclient))
-						{
-							ack = true;
-							cout<<"Received packet sequence from server"<<rcvdpktnumberforclient<<endl;
-							logEvents("GET","Received packet sequence from server" +to_string(rcvdpktnumberforclient));
-							bool expectedserverpkt = checkSequence(serverpktseq,rcvdpktnumberforserver);
+					threewayhandshakecomplete = true;
+					cout<<"Connection Established"<<endl;
+					logEvents("CLIENT", "Threeway handshake with server complete.");
+				}
 
-							if(expectedserverpkt)
+
+				bool ack = false;
+				bool transfercomplete = false;
+				int rcvdpktnumberforclient = -1;
+				int rcvdpktnumberforserver = -1 ;
+				int writeCounter = 0;
+				int extrabytes = 6;
+				char *recvbuff = new char[packetLengthInBytes];
+				time_t start = time(0);
+				int totalBytes = 0;
+				while(!(ack && transfercomplete))
+				{
+					if(!ack)
+					{
+						if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
+							throw SEND_FAILED_MSG;
+						logEvents("GET","Sent request to server: "+string(szbuffer));
+					}
+
+					recvbuff = new char[packetLengthInBytes+extrabytes];
+					memset(recvbuff,'\0',packetLengthInBytes+extrabytes);
+					correctpktrcvd = false;
+					while(!correctpktrcvd)
+					{
+						struct timeval *timeout = new timeval;
+						timeout->tv_sec=TIMEOUT_SEC;
+						timeout->tv_usec=0;
+						FD_ZERO(&readfds);
+						FD_SET(clientSocket,&readfds);
+						int i = 1;
+						if(!ack)
+							i = select(1,&readfds,NULL,NULL,timeout);
+						if(i)
+						{
+							if((ibytesrecv = recvfrom(clientSocket,recvbuff,packetLengthInBytes+extrabytes,0,(LPSOCKADDR)&serverSocketAddr,&socketlen))==SOCKET_ERROR)
+								throw RECV_FAILED_MSG;
+							//logEvents("GET","Data received from server \n"+ string(recvbuff));
+							rcvdpktnumberforclient = stoi(string(recvbuff).substr(0,3).c_str());
+							rcvdpktnumberforserver = stoi(string(recvbuff).substr(3,3).c_str());
+							logEvents("GET","rcvdpktnumberforclient: "+ to_string(rcvdpktnumberforclient));
+							logEvents("GET","rcvdpktnumberforserver:"+ to_string(rcvdpktnumberforserver));
+							if(checkSequence(clientpktseq,rcvdpktnumberforclient))
 							{
-								sendAck(clientSocket,serverSocketAddr,rcvdpktnumberforserver,socketlen);
-								++writeCounter;
-								cout<<"Total packets received "<<writeCounter<<endl;
-								logEvents("Get","Total packets received "+to_string(writeCounter));
-								char *writebuff = recvbuff+extrabytes; //this will ignore the first byte
-								totalBytes = totalBytes + ibytesrecv;
-								logEvents("Break ","---------------------------------------------------------------------");
-								logEvents("GET", "Bytes received from server in "+ to_string(writeCounter) +string("request: ") +  to_string(ibytesrecv));
-								if(string(writebuff).find("FIN")==0)
+								ack = true;
+								cout<<"Received packet sequence from server"<<rcvdpktnumberforclient<<endl;
+								logEvents("GET","Received packet sequence from server" +to_string(rcvdpktnumberforclient));
+								bool expectedserverpkt = checkSequence(serverpktseq,rcvdpktnumberforserver);
+
+								if(expectedserverpkt)
 								{
-									time_t end = time(0);
-									cout<<"Received "<<to_string(writeCounter)<<" packets for "<<totalBytes<< " bytes in "<<difftime(end,start)<<" seconds"<<endl;
-									logEvents("GET","Transfer complete. Received "+to_string(writeCounter) +" packets for " + to_string(totalBytes) +" bytes in " + to_string(difftime(end,start)) +" seconds");
-									transfercomplete = true;
-									clientpktseq = (clientpktseq + 1) % MAX_PACKET_SEQ;
+									sendAck(clientSocket,serverSocketAddr,rcvdpktnumberforserver,socketlen);
+									++writeCounter;
+									cout<<"Total packets received "<<writeCounter<<endl;
+									logEvents("Get","Total packets received "+to_string(writeCounter));
+									char *writebuff = recvbuff+extrabytes; //this will ignore the first byte
+									totalBytes = totalBytes + ibytesrecv;
+									logEvents("Break ","---------------------------------------------------------------------");
+									logEvents("GET", "Bytes received from server in "+ to_string(writeCounter) +string("request: ") +  to_string(ibytesrecv));
+									if(string(writebuff).find("FIN")==0)
+									{
+										time_t end = time(0);
+										cout<<"Received "<<to_string(writeCounter)<<" packets for "<<totalBytes<< " bytes in "<<difftime(end,start)<<" seconds"<<endl;
+										logEvents("GET","Transfer complete. Received "+to_string(writeCounter) +" packets for " + to_string(totalBytes) +" bytes in " + to_string(difftime(end,start)) +" seconds");
+										transfercomplete = true;
+										clientpktseq = (clientpktseq + 1) % MAX_PACKET_SEQ;
+									}
+									else
+									{
+										file.write(writebuff, ibytesrecv-extrabytes);
+									}
 								}
 								else
 								{
-									file.write(writebuff, ibytesrecv-extrabytes);
+									cout<<"Discarding the wrong PACKET "<<rcvdpktnumberforserver<<endl;
+									cout<<"Expecting packet "<<serverpktseq<<endl;
+									logEvents("Client","Discarding the wrong Packet.\nExpecting packet:"+to_string(serverpktseq)+"\nReceived packet: "+to_string(rcvdpktnumberforclient));
+									memset(szbuffer,'\0',packetLengthInBytes);
+									stringstream paddedseq;
+									paddedseq <<setfill('0')<<setw(3)<<serverpktseq*-1;
+									string seqs = paddedseq.str();
+									paddedseq.str("");
+									sprintf(szbuffer,seqs.c_str());
+									if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
+										throw SEND_FAILED_MSG;
+									logEvents("Client", "Sent NAK"+string(szbuffer));
 								}
 							}
 							else
 							{
-								cout<<"Discarding the wrong PACKET "<<rcvdpktnumberforserver<<endl;
-								cout<<"Expecting packet "<<serverpktseq<<endl;
-								logEvents("Client","Discarding the wrong Packet.\nExpecting packet:"+to_string(serverpktseq)+"\nReceived packet: "+to_string(rcvdpktnumberforclient));
-								memset(szbuffer,'\0',packetLengthInBytes);
-								stringstream paddedseq;
-								paddedseq <<setfill('0')<<setw(3)<<serverpktseq*-1;
-								string seqs = paddedseq.str();
-								paddedseq.str("");
-								sprintf(szbuffer,seqs.c_str());
-								if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
-									throw SEND_FAILED_MSG;
-								logEvents("Client", "Sent NAK"+string(szbuffer));
+								cout<<"Discarding the wrong ACK"<<endl;
+								cout<<"Expecting ACK for packet "<<clientpktseq<<endl;
+								cout<<"Received ACK for packet "<<rcvdpktnumberforclient<<endl;
+								if(ack)
+									sendAck(clientSocket,serverSocketAddr,rcvdpktnumberforserver,socketlen);
+								else
+									if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
+										throw SEND_FAILED_MSG;
+								logEvents("Client","Discarding the wrong ACK.\nExpecting ACK for packet:"+to_string(clientpktseq)+"\nReceived ACK for packet: "+to_string(rcvdpktnumberforclient));
 							}
 						}
 						else
 						{
-							cout<<"Discarding the wrong ACK"<<endl;
-							cout<<"Expecting ACK for packet "<<clientpktseq<<endl;
-							cout<<"Received ACK for packet "<<rcvdpktnumberforclient<<endl;
+							cout<<"Request timed out waiting for ACK for packet " + to_string(clientpktseq)<<endl;
+							logEvents("GET", "Request timed out waiting for ACK for packet " + to_string(clientpktseq));
 							if(ack)
 								sendAck(clientSocket,serverSocketAddr,rcvdpktnumberforserver,socketlen);
 							else
 								if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
 									throw SEND_FAILED_MSG;
-							logEvents("Client","Discarding the wrong ACK.\nExpecting ACK for packet:"+to_string(clientpktseq)+"\nReceived ACK for packet: "+to_string(rcvdpktnumberforclient));
 						}
-					}
-					else
-					{
-						cout<<"Request timed out waiting for ACK for packet " + to_string(clientpktseq)<<endl;
-						logEvents("GET", "Request timed out waiting for ACK for packet " + to_string(clientpktseq));
-						if(ack)
-							sendAck(clientSocket,serverSocketAddr,rcvdpktnumberforserver,socketlen);
-						else
-							if(sendto(clientSocket,szbuffer,strlen(szbuffer),0,(LPSOCKADDR)&serverSocketAddr,socketlen) ==SOCKET_ERROR)
-								throw SEND_FAILED_MSG;
 					}
 				}
 			}
+			else
+			{
+				cout<<"Error occured at client: "<<strerror(errno)<<endl;
+				logEvents("GET","Error occured at client: "+string(strerror(errno)));
+			}
+			file.close();
 		}
-		else
-		{
-			cout<<"Error occured at client: "<<strerror(errno)<<endl;
-			logEvents("GET","Error occured at client: "+string(strerror(errno)));
-		}
-		file.close();
 	}
 	catch(char* str)
 	{
@@ -570,6 +624,34 @@ void ftpPUT(string argument)
 				cout<<"Connection Established"<<endl;
 				logEvents("CLIENT", "Threeway handshake with server complete.");
 			}
+			if(rcvdacknowledgementmsg.find("-2")==0)
+			{
+				cout<<"File already exists. Want to rename? Y/N"<<endl;
+				string input = "";
+				while(input.length()<=0)
+					getline(cin,input);
+
+				if(input.compare("N")==0)
+				{					
+					stringstream paddedseq;
+					paddedseq <<setfill('0')<<setw(3)<<clientpktseq;
+					string seq = paddedseq.str();
+					paddedseq.str("");
+					string commandToServer = seq +string("N");
+					sprintf(szbuffer,commandToServer.c_str());
+					send_base = (clientpktseq +1) % MAX_PACKET_SEQ;
+					sendRequest(clientSocket, serverSocketAddr, szbuffer, clientpktseq, socketlen, strlen(szbuffer));
+				}
+				else
+				{
+					rcvdacknowledgementmsg = "1";
+				}
+			}
+			else if(rcvdacknowledgementmsg.find("-1")==0)
+			{
+				cout<<"Error from server: "<<rcvdacknowledgementmsg.erase(0,2)<<endl;
+				logEvents("ERROR", "Error from server: "+rcvdacknowledgementmsg.erase(0,1));
+			}
 			if(rcvdacknowledgementmsg.find("1")==0)
 			{
 				transferringdata = true;
@@ -591,14 +673,16 @@ void ftpPUT(string argument)
 					int bytesToSend = packetLengthInBytes < remainingBytesToSend ? packetLengthInBytes :remainingBytesToSend;
 					sendbuff = new char[bytesToSend];
 					memset(sendbuff,'\0',bytesToSend);
-					ifs.read(sendbuff, bytesToSend);	
+					ifs.read(sendbuff, bytesToSend);
+					logEvents("Debug",sendbuff);
 					char *tempbuff = new char[bytesToSend+extrabytes];
-					memset(tempbuff,'\0',bytesToSend+1);
+					memset(tempbuff,'\0',bytesToSend+extrabytes);
 					paddedseq <<setfill('0')<<setw(3)<<clientpktseq;
 					string seq = paddedseq.str();
 					paddedseq.str("");
-					
+
 					strcpy(tempbuff,seq.c_str());
+					logEvents("Debug",tempbuff);
 					memcpy(tempbuff+extrabytes,sendbuff,bytesToSend);
 					logEvents("Debug",tempbuff);
 					logEvents("Break ","---------------------------------------------------------------------");
@@ -614,15 +698,15 @@ void ftpPUT(string argument)
 						lastpackettoacked = clientpktseq;
 						nodatatoread = true;
 					}
-					
+
 					clientpktseq  = (clientpktseq +1) % MAX_PACKET_SEQ;
 					arrayindex = (arrayindex +1)% window;
-//					ibytessent = sendRequest(clientSocket,serverSocketAddr,tempbuff,clientpktseq,socketlen, bytesToSend+extrabytes);
+					//					ibytessent = sendRequest(clientSocket,serverSocketAddr,tempbuff,clientpktseq,socketlen, bytesToSend+extrabytes);
 					logEvents("DEBUG","Current available window position: "+to_string(arrayindex));
 					logEvents("DEBUG","next_pktseq: "+to_string(clientpktseq));
 					logEvents("DEBUG","Packets to send : "+to_string(packetstosend));
 					logEvents("DEBUG","available_window before send : "+to_string(available_window));
-					
+
 					if((available_window == 0) || (docontinue==false))
 					{
 						ibytessent = sendRequest(clientSocket,serverSocketAddr,tempbuff,clientpktseq,socketlen, bytesToSend+extrabytes);
@@ -636,11 +720,11 @@ void ftpPUT(string argument)
 				logEvents("GET","Transfer complete. Sent "+to_string(readCounter) +" packets for " + to_string(fsize) +" bytes in " + to_string(difftime(end,start)) +" seconds");
 
 			}
-			else
+			/*	else
 			{
-				cout<<"Error from server: "<<rcvdacknowledgementmsg.erase(0,1)<<endl;
-				logEvents("ERROR", "Error from server: "+rcvdacknowledgementmsg.erase(0,1));
-			}
+			cout<<"Error from server: "<<rcvdacknowledgementmsg.erase(0,1)<<endl;
+			logEvents("ERROR", "Error from server: "+rcvdacknowledgementmsg.erase(0,1));
+			}*/
 		}
 		else
 		{
@@ -664,7 +748,7 @@ void ftpPUT(string argument)
 		}
 		LocalFree(Error);
 	}
-	
+
 	lastpacketacknowledged = false;
 	lastpackettoacked = -1;
 	nodatatoread = false;
@@ -971,6 +1055,65 @@ void ftpDELETE(string file)
 		LocalFree(Error);
 	}
 }
+
+
+void ftpRENAME(string file)
+{
+	try
+	{
+		if(!threewayhandshakecomplete)
+		{
+			string commandToServer = rcvdacknowledgementmsg+string(szbuffer);
+			sprintf(szbuffer,commandToServer.c_str());
+		}
+		else
+		{
+			stringstream paddedseq;
+			paddedseq <<setfill('0')<<setw(3)<<clientpktseq;
+			string seq = paddedseq.str();
+			paddedseq.str("");
+			string commandToServer = seq+string(szbuffer);
+			sprintf(szbuffer,commandToServer.c_str());
+		}
+
+		if(!threewayhandshakecomplete)
+		{
+			threewayhandshakecomplete = true;
+			cout<<"Connection Established"<<endl;
+			logEvents("CLIENT", "Threeway handshake with server complete.");
+		}
+
+		if(sendRequest(clientSocket, serverSocketAddr, szbuffer, clientpktseq, socketlen, strlen(szbuffer)) == SOCKET_ERROR)
+			throw SEND_FAILED_MSG;
+
+		cout<<rcvdacknowledgementmsg.erase(0,1)<<endl;
+		logEvents("Client",rcvdacknowledgementmsg.erase(0,1));
+	}
+	catch(char* str)
+	{
+		LPTSTR Error = 0;
+		if(FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,NULL,WSAGetLastError() | GetLastError(),0,(LPTSTR)&Error,0,NULL) == 0)
+		{
+			cout<<str<<endl;
+			logEvents("ERROR", str +string(" Failed to format error message"));
+		}
+		else
+		{
+			cerr<<Error<<endl;
+			logEvents("ERROR", Error);
+		}
+		LocalFree(Error);
+	}
+}
+
+
+
+
+
+
+
+
+
 void ftpQUIT()
 {
 	try
@@ -1081,7 +1224,7 @@ bool checkSequence(int previouspktnumber, int ackrcvdforpkt)
 				available_window =available_window + ackrcvdforpkt - send_base + 1;
 			}
 			logEvents("DEBUG","available_window after recv: "+to_string(available_window));
-				send_base = (ackrcvdforpkt+1) % MAX_PACKET_SEQ;
+			send_base = (ackrcvdforpkt+1) % MAX_PACKET_SEQ;
 			logEvents("DEBUG","New send_base: "+to_string(send_base)+" lastpackettoacked: "+to_string(lastpackettoacked));
 			if(lastpackettoacked==ackrcvdforpkt)
 				lastpacketacknowledged=true;
@@ -1089,6 +1232,16 @@ bool checkSequence(int previouspktnumber, int ackrcvdforpkt)
 		}
 		else
 		{
+			if(send_base > ackrcvdforpkt)
+			{
+				logEvents("Debug>","\t\t\t\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+" available_window: "+to_string(available_window)+" send_base: "+to_string(send_base)+" ackrcvdforpkt: "+to_string(ackrcvdforpkt));
+				available_window =available_window + WINDOW_SIZE-send_base+ackrcvdforpkt;
+			}
+			else if(send_base <= ackrcvdforpkt)
+			{
+				logEvents("Debug<=","\t\t\t\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+" available_window: "+to_string(available_window)+" send_base: "+to_string(send_base)+" ackrcvdforpkt: "+to_string(ackrcvdforpkt));
+				available_window =available_window + ackrcvdforpkt - send_base;
+			}
 			send_base = -1 * ackrcvdforpkt;
 			cout<<"Received NAK for packet "<<send_base<<endl;
 			logEvents("Server","Received NAK for packet: "+to_string(send_base));

@@ -23,7 +23,7 @@ using namespace std;
 
 #define REQUEST_PORT 7001
 #define TIMEOUT_USEC 900000	
-#define TIMEOUT_SEC 10000
+#define TIMEOUT_SEC 5
 #define MAX_RETRIES 3000
 #define MAX_PACKET_SEQ 4
 #define WINDOW_SIZE MAX_PACKET_SEQ-1
@@ -94,6 +94,7 @@ void logEvents(string , string);
 void ftpQUIT(SOCKET);
 void cleanUp();
 void ftpDelete(string, string, SOCKET);
+void ftpRename(string, string, SOCKET);
 void receiveResponse();
 void sendAck(SOCKET , SOCKADDR_IN ,  int , int );
 bool receiveAck(SOCKET , SOCKADDR_IN, int , int );
@@ -326,6 +327,12 @@ void handleUserConnection(SOCKET clientSocket)
 					logEvents("SERVER", "Request from user @"+userAddress+":"+port +" --" +userrequest);
 					ftpDelete(argument1,presentworkingdirectory, clientSocket);
 				}
+				else if (strcmpi(command.c_str(),"RENAME")==0)
+				{
+					cout<<"RENAME request from user @"<<userAddress<<":"<<port<<endl;
+					logEvents("SERVER", "Request from user @"+userAddress+":"+port +" --" +userrequest);
+					ftpRename(argument1,argument2, clientSocket);
+				}
 				else
 				{
 					cout<<"This is INVALID Request\n";
@@ -397,8 +404,8 @@ void ftpLIST(string directory, SOCKET clientSocket)
 			logEvents("LIST","Opening file to read the dir contents.");
 			const int maxByteToSent = 1024-7;
 			//array to send to client. +1 to add sentinel character.
-//			char *buff= new char[maxByteToSent + 1];
-//			memset(buff,'\0',maxByteToSent+1);
+			//			char *buff= new char[maxByteToSent + 1];
+			//			memset(buff,'\0',maxByteToSent+1);
 
 			ifstream ifs("c:\\logs\\list.txt",ios::in);
 			ifs.seekg(0,ifs.end);
@@ -501,7 +508,7 @@ void ftpLIST(string directory, SOCKET clientSocket)
 		}
 		LocalFree(Error);
 	}
-		clientpktseq = (clientpktseq + 1) % MAX_PACKET_SEQ;
+	clientpktseq = (clientpktseq + 1) % MAX_PACKET_SEQ;
 	lastpacketacknowledged = false;
 	lastpackettoacked = -1;
 	nodatatoread = false;
@@ -663,12 +670,31 @@ void ftpPUT(string sourceFile,unsigned int fsize, string directory, SOCKET clien
 		directory.append("\\"+fileName);
 		//else
 		//directory = sourceFile;
-		ofstream ofs(directory, ios::out | ios::trunc | ios::binary);
-		time_t start = time(0);
-		if(ofs)
+		ofstream ofs;
+		bool fileAccessflag = false;
+
+		if(access(directory.c_str(),0) == -1)
 		{
+			cout<<"File does not exists."<<endl;
 			sentacknowledgementmsg = string("1"); 
-			sendAck(clientSocket, clientSocketAddr,clientpktseq,senderAddrSize);
+			fileAccessflag =true;
+		}
+		else
+		{
+			if(access(directory.c_str(),2) == -1)
+			{
+				cout<<"No write access"<<endl;
+			}
+			cout<<"File already exists. Want to overwrite? Waiting for client response..."<<endl;
+			sentacknowledgementmsg = string("-2"); 
+
+			fileAccessflag =true;
+		}
+
+
+		if(fileAccessflag)
+		{
+
 			int writeCounter = 0;
 			int remainingBytesToRead = fsize;
 			char *recvbuff;
@@ -677,6 +703,7 @@ void ftpPUT(string sourceFile,unsigned int fsize, string directory, SOCKET clien
 			int rcvdpktnumber = -1;
 			int extrabytes = 3;
 
+			sendAck(clientSocket, clientSocketAddr,clientpktseq,senderAddrSize);
 			while(remainingBytesToRead > 0)
 			{
 				int bytesToRecv = packetLengthInBytes < remainingBytesToRead ? packetLengthInBytes :remainingBytesToRead;
@@ -688,6 +715,19 @@ void ftpPUT(string sourceFile,unsigned int fsize, string directory, SOCKET clien
 					ibytesrecv = recvfrom(clientSocket,recvbuff,bytesToRecv+extrabytes,0,(LPSOCKADDR)&clientSocketAddr,&senderAddrSize);
 					rcvdpktnumber = stoi(string(recvbuff).substr(0,3));
 					sendAck(clientSocket,clientSocketAddr,rcvdpktnumber,senderAddrSize);
+				}
+				if(strlen(recvbuff)==4 && string(recvbuff).find("N")==3)
+				{
+					cout<<"Client discontinued the operstion"<<endl;
+					logEvents("Server","Client discontinued the operstion");
+
+					break;
+				}
+				if(fileAccessflag)// execute only once
+				{
+					ofs.open(directory, ios::out | ios::trunc | ios::binary);
+					time_t start = time(0);
+					fileAccessflag = false;
 				}
 				if(ibytesrecv !=SOCKET_ERROR)
 				{	
@@ -709,9 +749,12 @@ void ftpPUT(string sourceFile,unsigned int fsize, string directory, SOCKET clien
 					throw RECV_FAILED_MSG;
 				}
 			}
-			time_t end = time(0);
-			cout<<"Received "<<to_string(writeCounter)<<" packets for "<<fsize<< " bytes in "<<difftime(end,start)<<" seconds"<<endl;
-			logEvents("Put","Transfer complete. Sent "+to_string(writeCounter) +" packets for " + to_string(fsize) +" bytes in " + to_string(difftime(end,start)) +" seconds");
+			if(remainingBytesToRead >=0)
+			{
+				time_t end = time(0);
+				cout<<"Received "<<to_string(writeCounter)<<" packets for "<<fsize<< " bytes in "<<difftime(end,start)<<" seconds"<<endl;
+				logEvents("Put","Transfer complete. Sent "+to_string(writeCounter) +" packets for " + to_string(fsize) +" bytes in " + to_string(difftime(end,start)) +" seconds");
+			}
 		}
 		else
 		{
@@ -916,6 +959,59 @@ void ftpDelete(string file, string directory, SOCKET clientSocket)
 		LocalFree(Error);
 	}
 }
+
+
+void ftpRename(string oldfilename, string newfilename, SOCKET clientSocket)
+{
+	try
+	{
+		if(handshakerequest)
+			handshakerequest = false;
+		char localbuffer[packetLengthInBytes];
+		memset(localbuffer,'\0',packetLengthInBytes);
+
+		int result= rename( oldfilename.c_str() , newfilename.c_str() );
+		if (result!=0)
+		{
+			cout<<strerror(errno)<<endl;
+			sentacknowledgementmsg = string("0")+string(strerror(errno));
+			logEvents("RENAME", strerror(errno));
+			sendAck(clientSocket,clientSocketAddr,clientpktseq,senderAddrSize);
+
+		}
+		else
+		{
+			cout<<"File renamed."<<endl;
+			logEvents("RENAME", "File renamed.");
+			sentacknowledgementmsg = "1File renamed.";
+			sendAck(clientSocket,clientSocketAddr,clientpktseq,senderAddrSize);
+		}
+	}
+	catch (char *str)
+	{ 
+		LPTSTR Error = 0;
+		if(FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,NULL,WSAGetLastError() | GetLastError(),0,(LPTSTR)&Error,0,NULL) == 0)
+		{
+			cout<<str<<endl;
+			logEvents("ERROR", str +string(" Failed to format error message"));
+		}
+		else
+		{
+			cerr<<Error<<endl;
+			logEvents("ERROR", Error);
+		}
+		LocalFree(Error);
+	}
+}
+
+
+
+
+
+
+
+
+
 void cleanUp()
 {
 	logEvents("SERVER", "Closing client socket...");
@@ -982,6 +1078,7 @@ void sendAck(SOCKET socket , SOCKADDR_IN socketaddr, int pktnumberrcvd,  int soc
 
 	if(sendto(socket,sendbuffer,packetLengthInBytes,0,(LPSOCKADDR)&socketaddr,socketlength) ==  SOCKET_ERROR)
 		throw SEND_FAILED_MSG;
+	//
 	cout<<"ACK data sent to client: "<<sendbuffer<<endl;
 	cout<<"Sent ACK for packet sequence to client: "<<pktnumberrcvd<<endl;
 	logEvents("Server","Sent ACK for packet sequence to client: "+pktnumberrcvd);
@@ -1112,6 +1209,16 @@ bool receiveAck(SOCKET socket , SOCKADDR_IN socketaddr,int packetseq, int socket
 				}
 				else
 				{
+					if(send_base > -1 * ackrcvdforpkt)
+					{
+						logEvents("Debug>","\t\t\t\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+" available_window: "+to_string(available_window)+" send_base: "+to_string(send_base)+" ackrcvdforpkt: "+to_string(ackrcvdforpkt));
+						available_window =available_window + WINDOW_SIZE-send_base+ackrcvdforpkt;
+					}
+					else if(send_base <= -1 * ackrcvdforpkt)
+					{
+						logEvents("Debug<=","\t\t\t\nWINDOW_SIZE: "+to_string(WINDOW_SIZE)+" available_window: "+to_string(available_window)+" send_base: "+to_string(send_base)+" ackrcvdforpkt: "+to_string(ackrcvdforpkt));
+						available_window =available_window + ackrcvdforpkt - send_base;
+					}
 					send_base = -1 * ackrcvdforpkt;
 					cout<<"Received NAK for packet "<<send_base<<endl;
 					logEvents("Server","Received NAK for packet: "+to_string(send_base));
